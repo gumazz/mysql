@@ -1,0 +1,142 @@
+- name: Deploy master mysql
+  hosts: master 
+  become: yes
+  gather_facts: false
+  tasks:
+
+  - name: Add Percona yum repository
+    yum:
+      name: 
+        - https://repo.percona.com/yum/percona-release-latest.noarch.rpm
+      state: present
+      update_cache: true
+
+  - name: Install Percona
+    yum:
+      name: 
+        - Percona-Server-server-57
+      state: present
+
+  - name: copy bet.dmp
+    copy: 
+      src=bet.dmp
+      dest=/home/bet.dmp
+
+  - name: copy configs
+    copy: 
+      src=files_master/
+      dest=/etc/my.cnf.d/
+
+  - name: Start mysql service
+    systemd:
+      name: mysql
+      state: started
+      enabled: yes
+
+  - name: password save
+    shell: cat /var/log/mysqld.log | grep 'root@localhost:' | awk '{print $11}' > /home/pass
+
+  - name: disable password validation
+    shell: echo "SET GLOBAL validate_password_policy = 0;"|mysql -uroot -p`cat /home/pass` --connect-expired-password
+
+  - name: reset password 
+    shell: echo "ALTER USER USER() IDENTIFIED BY 'OtusL1nux218';"|mysql -uroot -p`cat /home/pass` --connect-expired-password
+
+  - name: check server id
+    shell: echo "SELECT @@server_id;"|mysql -uroot -p'OtusL1nux218'
+
+  - name: check gtid_mode
+    shell: echo "SHOW VARIABLES LIKE 'gtid_mode';"|mysql -uroot -p'OtusL1nux218'
+
+  - name: create database bet
+    shell: echo "CREATE DATABASE bet;"|mysql -uroot -p'OtusL1nux218'
+
+  - name: fill-in database bet
+    shell: mysql -uroot -p'OtusL1nux218' -D bet < /home/bet.dmp
+
+  - name: show tables of bet
+    shell: echo "SHOW TABLES;"|mysql -uroot -p'OtusL1nux218' -D bet
+
+  - name: create user repl
+    shell: echo "CREATE USER 'repl'@'%' IDENTIFIED BY 'OtusL1nux218';"|mysql -uroot -p'OtusL1nux218'
+
+  - name: grant replication to repl user
+    shell: echo "GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%' IDENTIFIED BY 'OtusL1nux218';"|mysql -uroot -p'OtusL1nux218'
+
+
+  - name: mysql dump 
+    shell: mysqldump --all-databases --set-gtid-purged=off --triggers --routines --master-data --ignore-table=bet.events_on_demand --ignore-table=bet.v_same_event -uroot -p'OtusL1nux218' > /home/master.sql
+  
+  - name: copydb 
+    fetch:
+      src: /home/master.sql
+      dest: files
+    ignore_errors: yes
+
+
+- name: Deploy slave mysql
+  hosts: slave 
+  become: yes
+  gather_facts: false
+  tasks:
+
+  - name: update yum caсhe
+    yum:
+      update_cache: true
+
+  - name: Add Percona yum repository
+    yum:
+      name: 
+        - https://repo.percona.com/yum/percona-release-latest.noarch.rpm
+      state: present
+
+  - name: Install Percona
+    yum:
+      name: 
+        - Percona-Server-server-57
+      state: present
+
+  - name: copy db
+    copy: 
+      src=files/master/home/master.sql
+      dest=/home/master.sql
+
+  - name: copy configs
+    copy: 
+      src=files_slave/
+      dest=/etc/my.cnf.d/
+
+  - name: Start mysql service
+    systemd:
+      name: mysql
+      state: started
+      enabled: yes
+
+  - name: pass save
+    shell: cat /var/log/mysqld.log | grep 'root@localhost:' | awk '{print $11}' > /home/pass
+
+  - name: disable password validation
+    shell: echo "SET GLOBAL validate_password_policy = 0;"|mysql -uroot -p`cat /home/pass` --connect-expired-password
+
+  - name: reset password
+    shell: mysql --connect-expired-password -uroot -p`cat /home/pass` -e "ALTER USER USER() IDENTIFIED BY 'OtusL1nux218';" 
+
+  - name: check server id
+    shell: mysql -uroot -p'OtusL1nux218' -e 'SELECT @@server_id;'
+
+  - name: fill-in slave from master.sql
+    shell: mysql -uroot -p'OtusL1nux218' -e 'SOURCE /home/master.sql'
+
+  - name: init replication
+    shell: mysql -uroot -p'OtusL1nux218' -e 'CHANGE MASTER TO MASTER_HOST = "192.168.50.10", MASTER_PORT = 3306, MASTER_USER = "repl", MASTER_PASSWORD = "OtusL1nux218", MASTER_AUTO_POSITION = 1;'
+
+  - name: start slave
+    shell: mysql -uroot -p'OtusL1nux218' -e 'START SLAVE;'
+
+  - name: show slave status
+    shell: mysql -uroot -p'OtusL1nux218' -e 'SHOW SLAVE STATUS\G;'
+
+  
+
+
+
